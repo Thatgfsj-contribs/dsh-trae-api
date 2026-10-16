@@ -8,11 +8,22 @@
  */
 
 const crypto = require('crypto');
+const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('./auth');
 
 const IDE_VERSION_CN = '3.3.67';
 const IDE_VERSION_CODE_CN = '20260401';
+
+// The official Trae client derives `x-device-type` from a
+// { darwin: 'mac', win32: 'windows' } map with a raw-value fallback, so a Linux
+// client reports 'linux'. Keep the same mapping instead of always claiming
+// Windows, and let both values be overridden for debugging.
+const OS_NAME_BY_PLATFORM = {
+  win32: 'windows',
+  darwin: 'mac',
+  linux: 'linux',
+};
 
 const MODEL_MAP = {
   'claude-opus-4-7': 'glm-5.2',
@@ -55,6 +66,19 @@ function generateMachineId() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function getDeviceType() {
+  return process.env.TRAE_DEVICE_TYPE
+    || OS_NAME_BY_PLATFORM[process.platform]
+    || process.platform;
+}
+
+function getOsVersion() {
+  if (process.env.TRAE_OS_VERSION) return process.env.TRAE_OS_VERSION;
+  if (process.platform === 'win32') return 'Windows 10';
+  if (process.platform === 'darwin') return 'macOS';
+  return os.release();
+}
+
 function buildHeaders(token, userId) {
   const machineId = generateMachineId();
   const requestId = crypto.randomUUID();
@@ -68,8 +92,8 @@ function buildHeaders(token, userId) {
     'x-request-id': requestId,
     'x-ide-version': IDE_VERSION_CN,
     'x-ide-version-code': IDE_VERSION_CODE_CN,
-    'x-device-type': 'windows',
-    'x-os-version': 'Windows 10',
+    'x-device-type': getDeviceType(),
+    'x-os-version': getOsVersion(),
     'Content-Type': 'application/json',
     'Accept': 'text/event-stream',
   };

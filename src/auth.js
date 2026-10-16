@@ -37,7 +37,7 @@ function initAuth(edition, manualToken) {
     return;
   }
 
-  // Edition -> data dir resolver map (shared with setup.js fallback)
+  // Edition -> data dir resolver map (shared with setup.cjs fallback)
   const EDITION_DIRS = {
     cn: getTraeCNDataDir,
     solo: getTraeSoloCNDataDir,

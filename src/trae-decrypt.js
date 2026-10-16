@@ -12,6 +12,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 // 4 hardcoded salt arrays from Trae CN's frontend JS (64 bytes each)
@@ -121,48 +122,152 @@ function decryptStorageValue(base64Value) {
   return plaintext.toString('utf8');
 }
 
+// Electron `userData` folder name per Trae edition (same on every platform).
+const EDITION_PRODUCT_NAMES = {
+  cn: 'Trae CN',
+  solo: 'TRAE SOLO CN',
+  sg: 'Trae',
+  'solo-sg': 'TRAE SOLO',
+};
+
+const AUTH_STORAGE_KEY = 'iCubeAuthInfo://icube.cloudide';
+
+/**
+ * Normalize any of these into the `<userData>/User` directory:
+ *   <userData>            e.g. ~/.config/Trae CN
+ *   <userData>/User       e.g. ~/.config/Trae CN/User
+ */
+function toUserDir(dir) {
+  const resolved = path.resolve(dir);
+  return path.basename(resolved) === 'User' ? resolved : path.join(resolved, 'User');
+}
+
+/**
+ * Directories that may contain an Electron `userData` folder on this platform.
+ *
+ * Trae is an Electron/VS Code based IDE, so its user data lives in the
+ * per-platform application-data location:
+ *
+ *   Windows : %APPDATA%                          -> C:\Users\<u>\AppData\Roaming
+ *   macOS   : ~/Library/Application Support
+ *   Linux   : $XDG_CONFIG_HOME or ~/.config      (plus ~/.local/share as fallback)
+ */
+function platformConfigRoots() {
+  const roots = [];
+  if (process.platform === 'win32') {
+    roots.push(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'));
+  } else if (process.platform === 'darwin') {
+    roots.push(path.join(os.homedir(), 'Library', 'Application Support'));
+  } else {
+    roots.push(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'));
+    roots.push(path.join(os.homedir(), '.local', 'share'));
+  }
+  return roots.filter(Boolean);
+}
+
+function hasStorageJson(userDir) {
+  return fs.existsSync(path.join(userDir, 'globalStorage', 'storage.json'));
+}
+
+/**
+ * Candidate `<userData>/User` directories for an edition, most specific first.
+ * `TRAE_DATA_DIR` (app userData dir or the `User` dir itself) wins if set.
+ */
+function listCandidateUserDirs(edition) {
+  const productName = EDITION_PRODUCT_NAMES[edition] || EDITION_PRODUCT_NAMES.cn;
+  const dirs = [];
+  if (process.env.TRAE_DATA_DIR) dirs.push(toUserDir(process.env.TRAE_DATA_DIR));
+  for (const root of platformConfigRoots()) {
+    dirs.push(path.join(root, productName, 'User'));
+  }
+  return [...new Set(dirs)];
+}
+
+/**
+ * Last-resort discovery: scan the platform config roots for any directory that
+ * actually holds a Trae storage.json. Covers renamed/repackaged builds whose
+ * folder name does not match the product name we expect.
+ */
+function scanForUserDir() {
+  for (const root of platformConfigRoots()) {
+    let entries;
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const userDir = path.join(root, entry.name, 'User');
+      if (hasStorageJson(userDir)) return userDir;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the existing `<userData>/User` directory for an edition. Falls back to
+ * the platform default (even if missing) so error messages stay actionable.
+ */
+function resolveUserDir(edition) {
+  const candidates = listCandidateUserDirs(edition);
+  const existing = candidates.find(hasStorageJson);
+  if (existing) return existing;
+  return scanForUserDir() || candidates[0];
+}
+
 function decryptAuthData(dataDir) {
-  const storagePath = path.join(dataDir, 'globalStorage', 'storage.json');
+  const userDir = toUserDir(dataDir);
+  const storagePath = path.join(userDir, 'globalStorage', 'storage.json');
 
   if (!fs.existsSync(storagePath)) {
     throw new Error(`storage.json not found at: ${storagePath}`);
   }
 
   const storage = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
-  const encryptedAuth = storage['iCubeAuthInfo://icube.cloudide'];
+  // Prefer the well-known key, but tolerate renamed ones across Trae versions.
+  const otherKeys = Object.keys(storage).filter(
+    (k) => k !== AUTH_STORAGE_KEY && k.startsWith('iCubeAuthInfo://') && typeof storage[k] === 'string' && storage[k].trim()
+  );
 
-  if (!encryptedAuth) {
-    throw new Error('iCubeAuthInfo://icube.cloudide key not found in storage.json');
+  let lastError = null;
+  for (const key of [AUTH_STORAGE_KEY, ...otherKeys]) {
+    const value = storage[key];
+    if (typeof value !== 'string' || !value.trim()) continue;
+
+    try {
+      if (value.trim().startsWith('{')) {
+        console.log('[decrypt] Auth data is plaintext (SG edition)');
+        return JSON.parse(value);
+      }
+
+      console.log(`[decrypt] Decrypting tc format from key: ${key}`);
+      return JSON.parse(decryptStorageValue(value));
+    } catch (err) {
+      lastError = err;
+    }
   }
 
-  if (encryptedAuth.trim().startsWith('{')) {
-    console.log('[decrypt] Auth data is plaintext (SG edition)');
-    return JSON.parse(encryptedAuth);
+  if (!storage[AUTH_STORAGE_KEY]) {
+    throw new Error(`${AUTH_STORAGE_KEY} key not found in storage.json`);
   }
-
-  console.log('[decrypt] Decrypting CN edition tc format...');
-  const decrypted = decryptStorageValue(encryptedAuth);
-  return JSON.parse(decrypted);
+  throw lastError || new Error(`Failed to decrypt auth data from ${storagePath}`);
 }
 
 function getTraeCNDataDir() {
-  const appData = process.env.APPDATA || path.join(process.env.HOME, 'AppData', 'Roaming');
-  return path.join(appData, 'Trae CN', 'User');
+  return resolveUserDir('cn');
 }
 
 function getTraeSGDataDir() {
-  const appData = process.env.APPDATA || path.join(process.env.HOME, 'AppData', 'Roaming');
-  return path.join(appData, 'Trae', 'User');
+  return resolveUserDir('sg');
 }
 
 function getTraeSoloCNDataDir() {
-  const appData = process.env.APPDATA || path.join(process.env.HOME, 'AppData', 'Roaming');
-  return path.join(appData, 'TRAE SOLO CN', 'User');
+  return resolveUserDir('solo');
 }
 
 function getTraeSoloSGDataDir() {
-  const appData = process.env.APPDATA || path.join(process.env.HOME, 'AppData', 'Roaming');
-  return path.join(appData, 'TRAE SOLO', 'User');
+  return resolveUserDir('solo-sg');
 }
 
 module.exports = {
@@ -172,4 +277,8 @@ module.exports = {
   getTraeSGDataDir,
   getTraeSoloCNDataDir,
   getTraeSoloSGDataDir,
+  resolveUserDir,
+  listCandidateUserDirs,
+  platformConfigRoots,
+  EDITION_PRODUCT_NAMES,
 };

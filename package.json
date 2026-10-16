@@ -18,6 +18,7 @@
     "cordis.patch.yml",
     "setup.cjs",
     "start.bat",
+    "start.sh",
     ".env.example",
     "README.md",
     "LICENSE"
