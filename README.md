@@ -12,18 +12,39 @@
 4. 第三方 Agent 将请求发送到本地服务器，本地服务器转发到 Trae 上游 API
 5. **消耗的是 Trae 的积分，无需额外付费**
 
+## 支持的平台
+
+Windows / macOS / Linux 均可运行，脚本会自动定位当前系统的 Trae 数据目录。
+
+| 平台 | Trae 数据目录 | 认证文件 | 一键启动 |
+|------|---------------|----------|----------|
+| Windows | `%APPDATA%\<产品名>` | `%APPDATA%\<产品名>\User\globalStorage\storage.json` | `start.bat` |
+| macOS | `~/Library/Application Support/<产品名>` | 同上，`.../User/globalStorage/storage.json` | `./start.sh` |
+| Linux | `$XDG_CONFIG_HOME/<产品名>`（默认 `~/.config/<产品名>`） | 同上，`.../User/globalStorage/storage.json` | `./start.sh` |
+
+其中 `<产品名>` 由 Trae 版本决定：`Trae CN`、`TRAE SOLO CN`、`Trae`、`TRAE SOLO`。
+
+例如在 Linux 上安装 Trae CN 时，认证文件位于：
+
+```
+~/.config/Trae CN/User/globalStorage/storage.json
+```
+
+若 Trae 的数据目录不在上述默认位置（自定义安装、重打包、Flatpak/Snap 等），用 `TRAE_DATA_DIR` 显式指定，或依赖自动扫描兜底。
+
 ## 支持的 Trae 版本
 
-| 版本 | IDE 名称 | 上游端点 |
-|------|----------|----------|
-| `cn` | Trae CN 国内版 | `trae-api-cn.mchost.guru` |
-| `solo` | TRAE SOLO CN 独立部署版 | `trae-api-cn.mchost.guru` |
-| `sg` | Trae 国际版 | `a0ai-api-sg.byteintlapi.com` |
-| `solo-sg` | TRAE SOLO 国际版 | `a0ai-api-sg.byteintlapi.com` |
+| 版本 | IDE 名称 | 数据目录 | 上游端点 |
+|------|----------|----------|----------|
+| `cn` | Trae CN 国内版 | `Trae CN` | `trae-api-cn.mchost.guru` |
+| `solo` | TRAE SOLO CN 独立部署版 | `TRAE SOLO CN` | `trae-api-cn.mchost.guru` |
+| `sg` | Trae 国际版 | `Trae` | `a0ai-api-sg.byteintlapi.com` |
+| `solo-sg` | TRAE SOLO 国际版 | `TRAE SOLO` | `a0ai-api-sg.byteintlapi.com` |
 
 ## 功能
 
 - 自动解密四版本认证数据，无需手动配置 Token
+- 跨平台自动定位 Trae 数据目录（Windows / macOS / Linux）
 - 提供 OpenAI (`/v1/chat/completions`) 和 Anthropic (`/v1/messages`) 兼容接口
 - 支持 OpenAI Responses API (`/v1/responses`)
 - Token 过期自动刷新，自动保存到 `.env`
@@ -59,14 +80,43 @@ dsh plugin --profile web remove dsh-trae-api
 
 ```bash
 npm install
-start.bat    # Windows 一键启动
+```
+
+首次运行需要解密本机 Trae 的认证数据并写入 `.env`：
+
+```bash
+npm run setup      # 等价于 node setup.cjs
+```
+
+然后启动服务：
+
+```bash
+npm start
+```
+
+也可以直接用一键脚本完成「首次 setup + 启动」：
+
+```bash
+./start.sh         # Linux / macOS
+start.bat          # Windows
 ```
 
 首次运行会自动从本机 Trae IDE 的 `storage.json` 解密认证数据并保存到 `.env`，之后直接读取 `.env` 启动。
 
+> 注意：`setup` 脚本的文件名是 `setup.cjs`。项目 `package.json` 声明了 `"type": "module"`，
+> 如果把它改回 `setup.js`，Node 会按 ES Module 解析并报
+> `ReferenceError: require is not defined in ES module scope`。
+
 ### 连接第三方 Agent
 
-**Claude Code：**
+**Claude Code（Linux / macOS）：**
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:9220"
+export ANTHROPIC_API_KEY="trae-local-api"
+claude
+```
+
+**Claude Code（Windows PowerShell）：**
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://localhost:9220"
 $env:ANTHROPIC_API_KEY = "trae-local-api"
@@ -102,12 +152,55 @@ response = client.chat.completions.create(
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `TRAE_EDITION` | Trae 版本 (cn/solo/sg/solo-sg) | cn |
+| `TRAE_DATA_DIR` | 手动指定 Trae 数据目录（可指向 `<产品名>` 目录或其中的 `User` 目录） | 自动探测 |
+| `TRAE_DEVICE_TYPE` | 覆盖请求头 `x-device-type` | 按平台自动（linux/mac/windows） |
+| `TRAE_OS_VERSION` | 覆盖请求头 `x-os-version` | 按平台自动 |
 | `API_KEY` | 本服务的 API Key | trae-local-api |
 | `PORT` | 监听端口 | 9220 |
 | `HOST` | 监听地址 | 127.0.0.1 |
 | `MAX_CONTEXT_TOKENS` | 最大上下文 Token 数 | 200000 |
 
 > 完整环境变量列表见 `.env.example`
+
+## 常见问题
+
+**`setup` 报 `require is not defined in ES module scope`**
+
+说明你用的是旧版 `setup.js`。请改用 `setup.cjs`（本仓库已修复）。
+
+**提示找不到 `storage.json`**
+
+1. 确认 Trae IDE 已安装且已登录；
+2. 查看 `npm run setup` 输出的「Searched roots」，确认搜索路径；
+3. 若数据目录不在默认位置，手动指定：
+
+```bash
+TRAE_DATA_DIR="/path/to/Trae CN" npm run setup
+```
+
+**`/v1/status` 显示 `has_token: false`**
+
+说明没有成功读取认证数据。重新执行 `npm run setup`，或在 `.env` 中手动设置 `TRAE_MANUAL_TOKEN`。
+
+## 已知问题
+
+**上游接口可能对部分模型返回 `3003`，表现为回复内容为空**（与操作系统无关）
+
+截至 2026-10-16 实测，`/api/agent/v3/llm_utils_chat` 对 `glm-5.2` 等模型返回：
+
+```
+{"code":3003,"message":"model service is unavailable ... InvalidParameter:
+ Invalid combination of reasoning_effort and thinking type: high + disabled"}
+```
+
+这是 Trae 上游对 `reasoning_effort` 与 `thinking` 组合的校验失败。代理拿到的是
+HTTP 200（错误在 SSE 事件里），因此会被当成成功，最终返回空内容。
+Windows / macOS / Linux 表现一致，与本次平台适配无关，可参考上游 issue
+[#3](https://github.com/Wang-JQ77/dsh-trae-api/issues/3)、
+[#4](https://github.com/Wang-JQ77/dsh-trae-api/issues/4)。
+
+排查建议：先用 `curl http://127.0.0.1:9220/v1/status` 确认 `has_token: true`
+（鉴权正常），再确认是否是该上游问题。
 
 ## 注意事项
 
