@@ -16,14 +16,14 @@
     "lib",
     "src",
     "cordis.patch.yml",
-    "setup.js",
+    "setup.cjs",
     "start.bat",
     ".env.example",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "setup": "node setup.js",
+    "setup": "node setup.cjs",
     "start": "node src/server.js"
   },
   "dependencies": {
